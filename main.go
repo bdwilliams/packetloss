@@ -1,65 +1,135 @@
 package main
 
 import (
+	"encoding/csv"
+	"encoding/json"
+	"flag"
 	"fmt"
+	"log"
+	"os"
+	"runtime"
+	"time"
 
+	"github.com/fatih/color"
 	"github.com/go-ping/ping"
 )
 
+type Hosts struct {
+	IPAddress string
+	Name      string
+}
+
+type Pings struct {
+	Sequence  int
+	IPAddress string
+	Duration  time.Duration
+	Date      time.Time
+}
 type PingResults struct {
+	IPAddress  string
+	Name       string
+	Date       time.Time
 	Sent       int
 	Recv       int
-	PingMin    float64
-	PingAvg    float64
-	PingMax    float64
-	PingStdDev float64
+	PingMin    time.Duration
+	PingAvg    time.Duration
+	PingMax    time.Duration
+	PingStdDev time.Duration
 	PacketLoss float64
+	Pings      []Pings
 }
 
 func main() {
-	hosts := map[string]string{
-		"8.8.8.8":         "Google DNS",
-		"1.1.1.1":         "Cloudflare",
-		"208.67.222.222":  "OpenDNS",
-		"69.162.81.155":   "Dallas, TX",
-		"192.199.248.75":  "Denver, CO",
-		"162.254.206.227": "Miami, FL",
-		"209.142.68.29":   "Chicago, IL",
-		"207.250.234.100": "Minneapolis, MN",
-		"206.71.50.230":   "New York, NY",
-		"65.49.22.66":     "San Francisco, CA",
-		"23.81.0.59":      "Seattle, WA",
+	fmt.Printf("Packet Loss Tester\n")
+
+	operatingsystem := runtime.GOOS
+	timeout := flag.Duration("t", 5, "timeout in seconds")
+
+	flag.Usage = func() {
+		color.Green("Usage: %s [options] [file]", os.Args[0])
+	}
+	flag.Parse()
+
+	f, err := os.Open("hosts.csv")
+	if err != nil {
+		fmt.Println(err)
 	}
 
+	defer f.Close()
+
+	csvReader := csv.NewReader(f)
+	data, err := csvReader.ReadAll()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	hosts := []Hosts{}
+	for _, d := range data {
+		hosts = append(hosts, Hosts{
+			IPAddress: d[0],
+			Name:      d[1],
+		})
+	}
+
+	const threshold = 80
 	var pingResults []PingResults
-	for h, l := range hosts {
-		fmt.Printf("Starting ping test to %s (%s)\n", h, l)
-		pinger, err := ping.NewPinger(h)
+	for _, d := range hosts {
+		var pings []Pings
+		fmt.Println("\n----------------------------------------------------------------")
+		count := 1
+		date := time.Now().Format("2006-01-02 15:04:05")
+		pinger, err := ping.NewPinger(d.IPAddress)
+		if operatingsystem == "windows" {
+			pinger.SetPrivileged(true)
+		}
+
 		if err != nil {
 			fmt.Println("ERROR:", err)
 			return
 		}
 
-		pinger.Count = 10
+		pinger.Timeout = *timeout
+		pinger.Count = int(*timeout / time.Millisecond)
+
+		color.White("Starting ping test (%v attempts) to %s (%s) - %s\n", (pinger.Count / 1000), d.IPAddress, d.Name, date)
 
 		pinger.OnRecv = func(pkt *ping.Packet) {
-			// fmt.Printf("%d bytes from %s: icmp_seq=%d time=%v ttl=%v
+			pings = append(pings, Pings{Sequence: count, IPAddress: d.IPAddress, Duration: pkt.Rtt, Date: time.Now()})
+			if pkt.Rtt > time.Duration(threshold)*time.Millisecond {
+				color.Red("\t%v - %d bytes from %s: icmp_seq=%d time=%v <-- high ping\n", count, pkt.Nbytes, pkt.IPAddr, pkt.Seq, pkt.Rtt)
+			} else {
+				color.White("\t%v - %d bytes from %s: icmp_seq=%d time=%v\n", count, pkt.Nbytes, pkt.IPAddr, pkt.Seq, pkt.Rtt)
+			}
+			count++
 		}
 
 		pinger.OnFinish = func(stats *ping.Statistics) {
 			var pingResult = PingResults{
+				Date:       time.Now(),
+				IPAddress:  d.IPAddress,
+				Name:       d.Name,
 				Sent:       stats.PacketsSent,
 				Recv:       stats.PacketsRecv,
-				PingMin:    stats.MinRtt.Seconds(),
-				PingAvg:    stats.AvgRtt.Seconds(),
-				PingMax:    stats.MaxRtt.Seconds(),
-				PingStdDev: stats.StdDevRtt.Seconds(),
+				PingMin:    stats.MinRtt,
+				PingAvg:    stats.AvgRtt,
+				PingMax:    stats.MaxRtt,
+				PingStdDev: stats.StdDevRtt,
 				PacketLoss: stats.PacketLoss,
+				Pings:      pings,
 			}
 
+			color.White("\n--- %s ping statistics ---\n", d.IPAddress)
+
 			if stats.PacketLoss > 0 {
-				fmt.Println("\tPacket loss detected:", stats.PacketLoss)
+				color.Red("\t%d packets transmitted, %d packets received, %d duplicates, %v%% packet loss detected\n",
+					stats.PacketsSent, stats.PacketsRecv, stats.PacketsRecvDuplicates, stats.PacketLoss)
+			} else {
+				color.White("\t%d packets transmitted, %d packets received, %d duplicates, %v%% packet loss\n",
+					stats.PacketsSent, stats.PacketsRecv, stats.PacketsRecvDuplicates, stats.PacketLoss)
 			}
+
+			color.White("\tround-trip min/avg/max/stddev = %v/%v/%v/%v\n",
+				stats.MinRtt, stats.AvgRtt, stats.MaxRtt, stats.StdDevRtt)
 
 			pingResults = append(pingResults, pingResult)
 		}
@@ -70,5 +140,26 @@ func main() {
 		}
 	}
 
-	// fmt.Println(pingResults)
+	color.White("\n----------------------------------------------------------------\n\n")
+
+	b, err := json.Marshal(pingResults)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	write_file := "output/results_" + time.Now().Format("2006-01-02_15:04:05") + ".json"
+	f, err = os.Create(write_file)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer f.Close()
+
+	err = os.WriteFile(write_file, b, 0644)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 }
