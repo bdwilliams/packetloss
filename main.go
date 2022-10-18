@@ -1,37 +1,44 @@
 package main
 
-// TODO:
-// create 'output' folder if it doesn't exist.
-// Add 'config file' with home address, etc.
-
 import (
 	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
-	"path/filepath"
 	"runtime"
 	"time"
 
 	"github.com/fatih/color"
 	"github.com/go-ping/ping"
+	"github.com/joho/godotenv"
+	"gorm.io/gorm"
 )
 
+type Model struct {
+	ID        uint           `gorm:"primaryKey" json:",omitempty"`
+	CreatedAt time.Time      `json:",omitempty"`
+	UpdatedAt time.Time      `json:",omitempty"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:",omitempty"`
+}
+
 type Hosts struct {
+	ID        uint
 	IPAddress string
 	Name      string
 }
 
 type Pings struct {
+	Model
+	ResultID  int `json:",omitempty"`
 	Sequence  int
 	IPAddress string
 	Duration  time.Duration
 	Date      time.Time
 }
 type PingResults struct {
+	Model
 	IPAddress  string
 	Name       string
 	Date       time.Time
@@ -42,10 +49,15 @@ type PingResults struct {
 	PingMax    time.Duration
 	PingStdDev time.Duration
 	PacketLoss float64
-	Pings      []Pings
+	Pings      []Pings `json:"pings,omitempty" gorm:"foreignKey:ResultID;references:ID"`
 }
 
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
 	var pingResults []PingResults
 	operatingsystem := runtime.GOOS
 	timeout := flag.Duration("t", 5, "timeout in seconds")
@@ -63,33 +75,7 @@ func main() {
 	defer f.Close()
 
 	if *parse {
-		files, err := ioutil.ReadDir("output/")
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		for _, file := range files {
-			if filepath.Ext(file.Name()) == ".json" {
-				file, err := ioutil.ReadFile("output/" + file.Name())
-				if err != nil {
-					fmt.Println(err)
-				}
-
-				// fmt.Println(string(file))
-				err = json.Unmarshal([]byte(file), &pingResults)
-				if err != nil {
-					fmt.Println(err)
-				}
-			}
-		}
-
-		b, err := json.Marshal(pingResults)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		fmt.Println(string(b))
+		Parse()
 	} else {
 		fmt.Printf("Packet Loss Tester\n")
 
@@ -183,7 +169,12 @@ func main() {
 			return
 		}
 
-		write_file := "output/results_" + time.Now().Format("2006-01-02_15:04:05") + ".json"
+		path := "output/"
+		err = os.MkdirAll(path, os.ModePerm)
+		if err != nil {
+			log.Println(err)
+		}
+		write_file := path + "results_" + time.Now().Format("2006-01-02_15:04:05") + ".json"
 		f, err = os.Create(write_file)
 		if err != nil {
 			fmt.Println(err)
