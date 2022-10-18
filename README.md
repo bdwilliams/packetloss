@@ -52,6 +52,7 @@ I have been running this test for almost 2 weeks now.  I have seen packet loss a
 
 I decided one of the queries I wanted to run was a cumulative count on the the total amount of packet loss grouped by each individual host and what I found was interesting.  The issue is ... not my ISP.
 
+```
 mysql> select sum(packet_loss) As total_packet_loss, name from ping_results where recv > 0 group by name order by sum(packet_loss);  
 +-------------------+---------------------------------------------------------+  
 | total_packet_loss | name                                                    |  
@@ -63,11 +64,13 @@ mysql> select sum(packet_loss) As total_packet_loss, name from ping_results wher
 |               380 | DiamondNet Provider (static137-block97.intelleqcom.net) |  
 +-------------------+---------------------------------------------------------+  
 5 rows in set (0.07 sec)  
+```
 
 As you can see, the total amount of packet loss is not coming from my ISP, but from the providers of my ISP.
 
 #### Cumulative Packet Loss (all time) - averaging packet loss
 
+```
 mysql> select count(*) AS total_reports, sum(packet_loss) As total_packet_loss, sum(packet_loss) / count(*) AS average_packet_loss, name from ping_results where recv > 0 group by name order by sum(packet_loss);  
 +---------------+-------------------+---------------------+---------------------------------------------------------+  
 | total_reports | total_packet_loss | average_packet_loss | name                                                    |  
@@ -79,4 +82,4 @@ mysql> select count(*) AS total_reports, sum(packet_loss) As total_packet_loss, 
 |           330 |               380 |  1.1515151515151516 | DiamondNet Provider (static137-block97.intelleqcom.net) |  
 +---------------+-------------------+---------------------+---------------------------------------------------------+  
 5 rows in set (0.07 sec)  
-
+```
